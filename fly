@@ -1,5 +1,5 @@
 app = "library-management-app"
-primary_region = "sin"
+primary_region = "lhr"
 
 [build]
   builder = "paketobuildpacks/builder:base"
