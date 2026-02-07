@@ -1,0 +1,1681 @@
+import flet as ft
+import sqlite3
+import asyncio
+from datetime import datetime, timedelta
+import barcode
+from barcode.writer import ImageWriter
+import os
+import json
+import io
+import base64
+
+class ModernLibraryApp:
+    def __init__(self, page: ft.Page):
+        self.page = page
+        self.page.title = "Modern Library System"
+        self.page.theme_mode = ft.ThemeMode.DARK
+        self.page.padding = 0
+        self.page.bgcolor = "#0a0e27"
+        
+        # Custom theme colors
+        self.primary_color = "#6366f1"
+        self.secondary_color = "#8b5cf6"
+        self.success_color = "#10b981"
+        self.danger_color = "#ef4444"
+        self.warning_color = "#f59e0b"
+        self.card_bg = "#1e1b4b"
+        self.sidebar_bg = "#0f172a"
+        
+        # Database setup
+        self.conn = sqlite3.connect('library_modern.db', check_same_thread=False)
+        self.cursor = self.conn.cursor()
+        self.init_database()
+        
+        # Current state
+        self.current_view = None
+        self.current_nav_button = None
+        
+        # Build UI
+        self.build_ui()
+    
+    def init_database(self):
+        """Initialize database with all tables"""
+        # Genres table
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS genres (
+                genre_code TEXT PRIMARY KEY,
+                genre_name TEXT NOT NULL UNIQUE
+            )
+        ''')
+        
+        # Books table
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS books (
+                book_code TEXT PRIMARY KEY,
+                book_name TEXT NOT NULL,
+                author TEXT NOT NULL,
+                publisher TEXT,
+                year_published INTEGER,
+                genre_code TEXT,
+                FOREIGN KEY (genre_code) REFERENCES genres(genre_code)
+            )
+        ''')
+        
+        # Members table
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS members (
+                member_code TEXT PRIMARY KEY,
+                member_name TEXT NOT NULL,
+                phone TEXT,
+                email TEXT,
+                address TEXT,
+                join_date TEXT
+            )
+        ''')
+        
+        # Borrowings table
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS borrowings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                member_code TEXT,
+                book_code TEXT,
+                borrow_date TEXT,
+                due_date TEXT,
+                return_date TEXT,
+                fine REAL DEFAULT 0,
+                FOREIGN KEY (member_code) REFERENCES members(member_code),
+                FOREIGN KEY (book_code) REFERENCES books(book_code)
+            )
+        ''')
+        
+        self.conn.commit()
+    
+    def show_snackbar(self, message, color="blue"):
+        """Show modern snackbar notification"""
+        self.page.snack_bar = ft.SnackBar(
+            content=ft.Text(message, color="white", weight=ft.FontWeight.BOLD, size=14),
+            bgcolor=color,
+            action="OK",
+            duration=3000,
+        )
+        self.page.snack_bar.open = True
+        self.page.update()
+    
+    def build_ui(self):
+        """Build main UI with modern sidebar"""
+        
+        # Modern Sidebar
+        sidebar = ft.Container(
+            content=ft.Column(
+                [
+                    # Logo/Brand
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Container(
+                                    content=ft.Text("📚", size=60),
+                                    bgcolor=self.primary_color,
+                                    border_radius=20,
+                                    width=100,
+                                    height=100,
+                                    alignment=ft.Alignment(0, 0),
+                                ),
+                                ft.Text("Library", size=24, weight=ft.FontWeight.BOLD),
+                                ft.Text("Management System", size=12, color="grey", italic=True),
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=10,
+                        ),
+                        padding=30,
+                    ),
+                    
+                    ft.Divider(height=1, color="white12"),
+                    ft.Container(height=10),
+                    
+                    # Navigation
+                    self.create_nav_button("🏠", "Dashboard", "home", True),
+                    self.create_nav_button("📂", "Genres", "genres", False),
+                    self.create_nav_button("📖", "Books", "books", False),
+                    self.create_nav_button("👥", "Members", "members", False),
+                    self.create_nav_button("🔄", "Transactions", "transactions", False),
+                    self.create_nav_button("🔍", "Search", "search", False),
+                    self.create_nav_button("📊", "Reports", "reports", False),
+                    
+                    # Spacer
+                    ft.Container(expand=True),
+                    
+                    # Footer
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Divider(height=1, color="white12"),
+                                ft.Container(height=10),
+                                ft.Text("Made with Flet", size=10, color="grey"),
+                                ft.Text("v3.0 Web Edition", size=10, color="grey", weight=ft.FontWeight.BOLD),
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=3,
+                        ),
+                        padding=15,
+                    ),
+                ],
+                spacing=2,
+            ),
+            width=250,
+            bgcolor=self.sidebar_bg,
+            padding=0,
+        )
+        
+        # Content area
+        self.content_area = ft.Container(
+            content=self.create_home_view(),
+            expand=True,
+            padding=30,
+            bgcolor="#0a0e27",
+        )
+        
+        # Main layout
+        self.page.add(
+            ft.Row(
+                [
+                    sidebar,
+                    ft.VerticalDivider(width=1, color="white12"),
+                    self.content_area,
+                ],
+                spacing=0,
+                expand=True,
+            )
+        )
+    
+    def create_nav_button(self, icon, label, view_name, selected=False):
+        """Create modern navigation button"""
+        btn = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Text(icon, size=22),
+                    ft.Text(label, size=14, weight=ft.FontWeight.W_500),
+                ],
+                spacing=15,
+            ),
+            padding=ft.padding.symmetric(horizontal=20, vertical=14),
+            bgcolor=self.primary_color if selected else "transparent",
+            border_radius=12,
+            margin=ft.margin.symmetric(horizontal=10, vertical=2),
+            ink=True,
+            on_click=lambda _: self.navigate_to(view_name, btn),
+            animate=ft.Animation(200, "easeOut"),
+        )
+        
+        if selected:
+            self.current_nav_button = btn
+        
+        return btn
+    
+    def navigate_to(self, view_name, button):
+        """Navigate between views with animation"""
+        # Update button states
+        if self.current_nav_button:
+            self.current_nav_button.bgcolor = "transparent"
+        
+        button.bgcolor = self.primary_color
+        self.current_nav_button = button
+        
+        # Show loading indicator briefly
+        self.content_area.content = ft.Container(
+            content=ft.ProgressRing(),
+            alignment=ft.Alignment(0, 0),
+            expand=True,
+        )
+        self.page.update()
+        
+        # Switch content
+        if view_name == "home":
+            self.content_area.content = self.create_home_view()
+        elif view_name == "genres":
+            self.content_area.content = self.create_genres_view()
+        elif view_name == "books":
+            self.content_area.content = self.create_books_view()
+        elif view_name == "members":
+            self.content_area.content = self.create_members_view()
+        elif view_name == "transactions":
+            self.content_area.content = self.create_transactions_view()
+        elif view_name == "search":
+            self.content_area.content = self.create_search_view()
+        elif view_name == "reports":
+            self.content_area.content = self.create_reports_view()
+        
+        self.page.update()
+    
+    # ==================== HOME/DASHBOARD ====================
+    def create_home_view(self):
+        """Create modern dashboard"""
+        # Get stats
+        self.cursor.execute("SELECT COUNT(*) FROM books")
+        total_books = self.cursor.fetchone()[0]
+        
+        self.cursor.execute("SELECT COUNT(*) FROM members")
+        total_members = self.cursor.fetchone()[0]
+        
+        self.cursor.execute("SELECT COUNT(*) FROM genres")
+        total_genres = self.cursor.fetchone()[0]
+        
+        self.cursor.execute("SELECT COUNT(*) FROM borrowings WHERE return_date IS NULL")
+        active_borrows = self.cursor.fetchone()[0]
+        
+        self.cursor.execute("SELECT COUNT(*) FROM borrowings WHERE return_date IS NULL AND due_date < ?",
+                          (datetime.now().strftime("%Y-%m-%d"),))
+        overdue = self.cursor.fetchone()[0]
+        
+        return ft.Column(
+            [
+                # Header
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Column(
+                                [
+                                    ft.Text("📊 Dashboard", size=36, weight=ft.FontWeight.BOLD),
+                                    ft.Text(f"Welcome back! • {datetime.now().strftime('%B %d, %Y')}", 
+                                           size=14, color="grey"),
+                                ],
+                                spacing=5,
+                            ),
+                        ],
+                    ),
+                    margin=ft.margin.only(bottom=30),
+                ),
+                
+                # Stats Grid
+                ft.ResponsiveRow(
+                    [
+                        ft.Container(
+                            col={"sm": 12, "md": 6, "lg": 3},
+                            content=self.create_stat_card(
+                                "📚", "Total Books", str(total_books), 
+                                self.primary_color, f"linear-gradient(135deg, {self.primary_color} 0%, #4f46e5 100%)"
+                            ),
+                            padding=10,
+                        ),
+                        ft.Container(
+                            col={"sm": 12, "md": 6, "lg": 3},
+                            content=self.create_stat_card(
+                                "👥", "Members", str(total_members), 
+                                self.success_color, f"linear-gradient(135deg, {self.success_color} 0%, #059669 100%)"
+                            ),
+                            padding=10,
+                        ),
+                        ft.Container(
+                            col={"sm": 12, "md": 6, "lg": 3},
+                            content=self.create_stat_card(
+                                "📖", "Active Loans", str(active_borrows), 
+                                self.warning_color, f"linear-gradient(135deg, {self.warning_color} 0%, #d97706 100%)"
+                            ),
+                            padding=10,
+                        ),
+                        ft.Container(
+                            col={"sm": 12, "md": 6, "lg": 3},
+                            content=self.create_stat_card(
+                                "⚠️", "Overdue", str(overdue), 
+                                self.danger_color, f"linear-gradient(135deg, {self.danger_color} 0%, #dc2626 100%)"
+                            ),
+                            padding=10,
+                        ),
+                    ],
+                ),
+                
+                ft.Container(height=30),
+                
+                # Quick Actions
+                ft.Text("⚡ Quick Actions", size=24, weight=ft.FontWeight.BOLD),
+                ft.Container(height=15),
+                
+                ft.ResponsiveRow(
+                    [
+                        ft.Container(
+                            col={"sm": 12, "md": 4},
+                            content=self.create_action_card(
+                                "➕ Add New Book",
+                                "Add books to the library",
+                                self.primary_color,
+                                lambda: self.navigate_to("books", self.current_nav_button)
+                            ),
+                            padding=10,
+                        ),
+                        ft.Container(
+                            col={"sm": 12, "md": 4},
+                            content=self.create_action_card(
+                                "👤 Register Member",
+                                "Add new library member",
+                                self.success_color,
+                                lambda: self.navigate_to("members", self.current_nav_button)
+                            ),
+                            padding=10,
+                        ),
+                        ft.Container(
+                            col={"sm": 12, "md": 4},
+                            content=self.create_action_card(
+                                "🔄 Borrow/Return",
+                                "Process transactions",
+                                self.warning_color,
+                                lambda: self.navigate_to("transactions", self.current_nav_button)
+                            ),
+                            padding=10,
+                        ),
+                    ],
+                ),
+            ],
+            scroll=ft.ScrollMode.AUTO,
+        )
+    
+    def create_stat_card(self, icon, label, value, color, gradient):
+        """Create modern stat card with gradient"""
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Text(icon, size=40),
+                            ft.Container(expand=True),
+                        ],
+                    ),
+                    ft.Container(height=15),
+                    ft.Text(value, size=36, weight=ft.FontWeight.BOLD),
+                    ft.Text(label, size=14, color="white70"),
+                ],
+                spacing=5,
+            ),
+            gradient=ft.LinearGradient(
+                begin=ft.Alignment(-1, -1),
+                end=ft.Alignment(1, 1),
+                colors=[color, color + "dd"],
+            ),
+            border_radius=20,
+            padding=25,
+            height=180,
+            animate=ft.Animation(300, "easeOut"),
+            shadow=ft.BoxShadow(
+                spread_radius=1,
+                blur_radius=15,
+                color=color + "40",
+                offset=ft.Offset(0, 5),
+            ),
+        )
+    
+    def create_action_card(self, title, subtitle, color, on_click):
+        """Create action card"""
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(title, size=18, weight=ft.FontWeight.BOLD),
+                    ft.Container(height=5),
+                    ft.Text(subtitle, size=13, color="white70"),
+                ],
+            ),
+            bgcolor=self.card_bg,
+            border=ft.border.all(2, color + "40"),
+            border_radius=15,
+            padding=20,
+            ink=True,
+            on_click=lambda _: on_click(),
+            animate=ft.Animation(200, "easeOut"),
+        )
+    
+    # ==================== GENRES VIEW ====================
+    def create_genres_view(self):
+        """Create genres management view"""
+        # Input fields
+        self.genre_code_field = ft.TextField(
+            label="Genre Code",
+            hint_text="2 digits (e.g., 01, 12)",
+            width=200,
+            max_length=2,
+            border_color=self.primary_color,
+            focused_border_color=self.secondary_color,
+        )
+        
+        self.genre_name_field = ft.TextField(
+            label="Genre Name",
+            hint_text="e.g., Fiction, Science",
+            width=350,
+            border_color=self.primary_color,
+            focused_border_color=self.secondary_color,
+        )
+        
+        # Genre list
+        self.genre_list_container = ft.Column(spacing=10)
+        self.refresh_genres()
+        
+        return ft.Column(
+            [
+                ft.Text("📂 Genre Management", size=32, weight=ft.FontWeight.BOLD),
+                ft.Container(height=20),
+                
+                # Input card
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text("✨ Add New Genre", size=20, weight=ft.FontWeight.BOLD),
+                            ft.Container(height=15),
+                            ft.Row(
+                                [
+                                    self.genre_code_field,
+                                    self.genre_name_field,
+                                    ft.FilledButton(
+                                        "➕ Add Genre",
+                                        on_click=self.add_genre,
+                                        style=ft.ButtonStyle(
+                                            bgcolor=self.primary_color,
+                                            color="white",
+                                            padding=20,
+                                        ),
+                                    ),
+                                ],
+                                spacing=15,
+                                wrap=True,
+                            ),
+                        ],
+                    ),
+                    bgcolor=self.card_bg,
+                    border_radius=20,
+                    padding=25,
+                    border=ft.border.all(1, "white12"),
+                ),
+                
+                ft.Container(height=30),
+                ft.Text("📋 Genres List", size=24, weight=ft.FontWeight.BOLD),
+                ft.Container(height=10),
+                
+                # Genre list
+                ft.Container(
+                    content=self.genre_list_container,
+                    height=450,
+                ),
+            ],
+            scroll=ft.ScrollMode.AUTO,
+        )
+    
+    def add_genre(self, e):
+        """Add new genre"""
+        code = self.genre_code_field.value.strip() if self.genre_code_field.value else ""
+        name = self.genre_name_field.value.strip() if self.genre_name_field.value else ""
+        
+        if not code or not name:
+            self.show_snackbar("❌ Please fill all fields!", self.danger_color)
+            return
+        
+        if len(code) != 2 or not code.isdigit():
+            self.show_snackbar("❌ Code must be 2 digits!", self.danger_color)
+            return
+        
+        try:
+            self.cursor.execute("INSERT INTO genres VALUES (?, ?)", (code, name))
+            self.conn.commit()
+            self.show_snackbar(f"✅ Genre '{name}' added successfully!", self.success_color)
+            self.genre_code_field.value = ""
+            self.genre_name_field.value = ""
+            self.refresh_genres()
+            self.page.update()
+        except sqlite3.IntegrityError:
+            self.show_snackbar("❌ Code or name already exists!", self.danger_color)
+    
+    def refresh_genres(self):
+        """Refresh genre list"""
+        self.genre_list_container.controls.clear()
+        
+        self.cursor.execute("SELECT * FROM genres ORDER BY genre_code")
+        genres = self.cursor.fetchall()
+        
+        if not genres:
+            self.genre_list_container.controls.append(
+                ft.Container(
+                    content=ft.Text(
+                        "No genres yet. Add your first one! 🚀", 
+                        size=16, 
+                        color="grey",
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    padding=40,
+                    alignment=ft.Alignment(0, 0),
+                )
+            )
+        else:
+            for code, name in genres:
+                self.genre_list_container.controls.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Container(
+                                    content=ft.Text(code, size=16, weight=ft.FontWeight.BOLD, color="white"),
+                                    bgcolor=self.primary_color,
+                                    padding=15,
+                                    border_radius=10,
+                                    width=80,
+                                    alignment=ft.Alignment(0, 0),
+                                ),
+                                ft.Text(name, size=16, weight=ft.FontWeight.W_500, expand=True),
+                                ft.IconButton(
+                                    icon=ft.icons.DELETE_OUTLINE,
+                                    icon_color=self.danger_color,
+                                    tooltip="Delete genre",
+                                    on_click=lambda _, c=code: self.delete_genre(c),
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        ),
+                        bgcolor=self.card_bg,
+                        border_radius=15,
+                        padding=15,
+                        border=ft.border.all(1, "white12"),
+                        animate=ft.Animation(200, "easeOut"),
+                    )
+                )
+        
+        if self.page:
+            self.page.update()
+    
+    def delete_genre(self, code):
+        """Delete genre with confirmation"""
+        def confirm_delete(e):
+            try:
+                self.cursor.execute("DELETE FROM genres WHERE genre_code = ?", (code,))
+                self.conn.commit()
+                self.show_snackbar("✅ Genre deleted!", self.success_color)
+                self.refresh_genres()
+                dialog.open = False
+                self.page.update()
+            except Exception as ex:
+                self.show_snackbar("❌ Cannot delete! Genre has books.", self.danger_color)
+                dialog.open = False
+                self.page.update()
+        
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Confirm Delete"),
+            content=ft.Text(f"Delete genre '{code}'? This cannot be undone."),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: setattr(dialog, 'open', False) or self.page.update()),
+                ft.TextButton("Delete", on_click=confirm_delete, style=ft.ButtonStyle(color=self.danger_color)),
+            ],
+        )
+        
+        self.page.dialog = dialog
+        dialog.open = True
+        self.page.update()
+    
+    # ==================== BOOKS VIEW ====================
+    def create_books_view(self):
+        """Create books management view"""
+        # Input fields
+        self.book_name_field = ft.TextField(
+            label="Book Title",
+            hint_text="Enter book title",
+            border_color=self.primary_color,
+            expand=True,
+        )
+        
+        self.book_author_field = ft.TextField(
+            label="Author",
+            hint_text="Enter author name",
+            border_color=self.primary_color,
+            expand=True,
+        )
+        
+        self.book_publisher_field = ft.TextField(
+            label="Publisher",
+            hint_text="Optional",
+            border_color=self.primary_color,
+            expand=True,
+        )
+        
+        self.book_year_field = ft.TextField(
+            label="Year",
+            hint_text="e.g., 2023",
+            border_color=self.primary_color,
+            width=150,
+        )
+        
+        # Get genres for dropdown
+        self.cursor.execute("SELECT genre_code, genre_name FROM genres")
+        genres = self.cursor.fetchall()
+        genre_options = [ft.dropdown.Option(f"{code} - {name}") for code, name in genres]
+        
+        self.book_genre_dropdown = ft.Dropdown(
+            label="Genre",
+            hint_text="Select genre",
+            options=genre_options if genre_options else [ft.dropdown.Option("No genres")],
+            border_color=self.primary_color,
+            width=300,
+        )
+        
+        # Books list
+        self.books_list_container = ft.Column(spacing=10)
+        self.refresh_books()
+        
+        return ft.Column(
+            [
+                ft.Text("📖 Books Management", size=32, weight=ft.FontWeight.BOLD),
+                ft.Container(height=20),
+                
+                # Input form
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text("✨ Add New Book", size=20, weight=ft.FontWeight.BOLD),
+                            ft.Container(height=15),
+                            ft.ResponsiveRow(
+                                [
+                                    ft.Container(col={"sm": 12, "md": 6}, content=self.book_name_field, padding=5),
+                                    ft.Container(col={"sm": 12, "md": 6}, content=self.book_author_field, padding=5),
+                                    ft.Container(col={"sm": 12, "md": 6}, content=self.book_publisher_field, padding=5),
+                                    ft.Container(col={"sm": 12, "md": 3}, content=self.book_year_field, padding=5),
+                                    ft.Container(col={"sm": 12, "md": 3}, content=self.book_genre_dropdown, padding=5),
+                                ],
+                            ),
+                            ft.Container(height=10),
+                            ft.FilledButton(
+                                "➕ Add Book",
+                                on_click=self.add_book,
+                                style=ft.ButtonStyle(
+                                    bgcolor=self.primary_color,
+                                    color="white",
+                                    padding=20,
+                                ),
+                            ),
+                        ],
+                    ),
+                    bgcolor=self.card_bg,
+                    border_radius=20,
+                    padding=25,
+                    border=ft.border.all(1, "white12"),
+                ),
+                
+                ft.Container(height=30),
+                ft.Text("📚 Books Library", size=24, weight=ft.FontWeight.BOLD),
+                ft.Container(height=10),
+                
+                # Books list
+                ft.Container(
+                    content=self.books_list_container,
+                    height=400,
+                ),
+            ],
+            scroll=ft.ScrollMode.AUTO,
+        )
+    
+    def generate_book_code(self, genre_code):
+        """Generate unique book code"""
+        self.cursor.execute(
+            "SELECT book_code FROM books WHERE genre_code = ? ORDER BY book_code DESC LIMIT 1",
+            (genre_code,)
+        )
+        result = self.cursor.fetchone()
+        
+        if result:
+            last_code = result[0]
+            sequence = int(last_code[len(genre_code):]) + 1
+        else:
+            sequence = 1
+        
+        return f"{genre_code}{sequence:05d}"
+    
+    def add_book(self, e):
+        """Add new book"""
+        name = self.book_name_field.value.strip() if self.book_name_field.value else ""
+        author = self.book_author_field.value.strip() if self.book_author_field.value else ""
+        publisher = self.book_publisher_field.value.strip() if self.book_publisher_field.value else ""
+        year = self.book_year_field.value.strip() if self.book_year_field.value else ""
+        genre = self.book_genre_dropdown.value
+        
+        if not name or not author or not genre or genre == "No genres":
+            self.show_snackbar("❌ Please fill required fields!", self.danger_color)
+            return
+        
+        genre_code = genre.split(' - ')[0]
+        book_code = self.generate_book_code(genre_code)
+        year_val = int(year) if year.isdigit() else None
+        
+        try:
+            self.cursor.execute(
+                "INSERT INTO books VALUES (?, ?, ?, ?, ?, ?)",
+                (book_code, name, author, publisher, year_val, genre_code)
+            )
+            self.conn.commit()
+            self.show_snackbar(f"✅ Book added! Code: {book_code}", self.success_color)
+            
+            # Clear fields
+            self.book_name_field.value = ""
+            self.book_author_field.value = ""
+            self.book_publisher_field.value = ""
+            self.book_year_field.value = ""
+            
+            self.refresh_books()
+            self.page.update()
+        except Exception as ex:
+            self.show_snackbar(f"❌ Error: {str(ex)}", self.danger_color)
+    
+    def refresh_books(self):
+        """Refresh books list"""
+        self.books_list_container.controls.clear()
+        
+        self.cursor.execute("SELECT * FROM books ORDER BY book_code DESC LIMIT 50")
+        books = self.cursor.fetchall()
+        
+        if not books:
+            self.books_list_container.controls.append(
+                ft.Container(
+                    content=ft.Text(
+                        "No books yet. Add your first one! 📚",
+                        size=16,
+                        color="grey",
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    padding=40,
+                    alignment=ft.Alignment(0, 0),
+                )
+            )
+        else:
+            for book in books:
+                code, name, author, publisher, year, genre_code = book
+                self.books_list_container.controls.append(
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Row(
+                                    [
+                                        ft.Container(
+                                            content=ft.Text(code, size=12, weight=ft.FontWeight.BOLD),
+                                            bgcolor=self.primary_color,
+                                            padding=8,
+                                            border_radius=8,
+                                        ),
+                                        ft.Container(expand=True),
+                                        ft.IconButton(
+                                            icon=ft.icons.DELETE_OUTLINE,
+                                            icon_color=self.danger_color,
+                                            tooltip="Delete book",
+                                            on_click=lambda _, c=code: self.delete_book(c),
+                                        ),
+                                    ],
+                                ),
+                                ft.Text(name, size=16, weight=ft.FontWeight.BOLD),
+                                ft.Text(f"by {author}", size=13, color="grey"),
+                                ft.Row(
+                                    [
+                                        ft.Text(f"📅 {year or 'N/A'}", size=12, color="white70"),
+                                        ft.Text("•", color="grey"),
+                                        ft.Text(f"📂 {genre_code}", size=12, color="white70"),
+                                        ft.Text("•", color="grey") if publisher else ft.Container(),
+                                        ft.Text(f"🏢 {publisher}", size=12, color="white70") if publisher else ft.Container(),
+                                    ],
+                                    spacing=5,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
+                        bgcolor=self.card_bg,
+                        border_radius=15,
+                        padding=20,
+                        border=ft.border.all(1, "white12"),
+                        animate=ft.Animation(200, "easeOut"),
+                    )
+                )
+        
+        if self.page:
+            self.page.update()
+    
+    def delete_book(self, code):
+        """Delete book"""
+        def confirm_delete(e):
+            try:
+                self.cursor.execute("DELETE FROM books WHERE book_code = ?", (code,))
+                self.conn.commit()
+                self.show_snackbar("✅ Book deleted!", self.success_color)
+                self.refresh_books()
+                dialog.open = False
+                self.page.update()
+            except Exception as ex:
+                self.show_snackbar("❌ Cannot delete! Book is borrowed.", self.danger_color)
+                dialog.open = False
+                self.page.update()
+        
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Confirm Delete"),
+            content=ft.Text(f"Delete book '{code}'?"),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: setattr(dialog, 'open', False) or self.page.update()),
+                ft.TextButton("Delete", on_click=confirm_delete, style=ft.ButtonStyle(color=self.danger_color)),
+            ],
+        )
+        
+        self.page.dialog = dialog
+        dialog.open = True
+        self.page.update()
+    
+    # ==================== MEMBERS VIEW ====================
+    def create_members_view(self):
+        """Create members management view"""
+        # Input fields
+        self.member_name_field = ft.TextField(
+            label="Member Name",
+            hint_text="Enter full name",
+            border_color=self.primary_color,
+            expand=True,
+        )
+        
+        self.member_phone_field = ft.TextField(
+            label="Phone",
+            hint_text="Optional",
+            border_color=self.primary_color,
+            expand=True,
+        )
+        
+        self.member_email_field = ft.TextField(
+            label="Email",
+            hint_text="Optional",
+            border_color=self.primary_color,
+            expand=True,
+        )
+        
+        self.member_address_field = ft.TextField(
+            label="Address",
+            hint_text="Optional",
+            border_color=self.primary_color,
+            expand=True,
+            multiline=True,
+            max_lines=2,
+        )
+        
+        # Members list
+        self.members_list_container = ft.Column(spacing=10)
+        self.refresh_members()
+        
+        return ft.Column(
+            [
+                ft.Text("👥 Members Management", size=32, weight=ft.FontWeight.BOLD),
+                ft.Container(height=20),
+                
+                # Input form
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text("✨ Register New Member", size=20, weight=ft.FontWeight.BOLD),
+                            ft.Container(height=15),
+                            ft.ResponsiveRow(
+                                [
+                                    ft.Container(col={"sm": 12, "md": 6}, content=self.member_name_field, padding=5),
+                                    ft.Container(col={"sm": 12, "md": 6}, content=self.member_phone_field, padding=5),
+                                    ft.Container(col={"sm": 12, "md": 6}, content=self.member_email_field, padding=5),
+                                    ft.Container(col={"sm": 12, "md": 6}, content=self.member_address_field, padding=5),
+                                ],
+                            ),
+                            ft.Container(height=10),
+                            ft.FilledButton(
+                                "➕ Add Member",
+                                on_click=self.add_member,
+                                style=ft.ButtonStyle(
+                                    bgcolor=self.success_color,
+                                    color="white",
+                                    padding=20,
+                                ),
+                            ),
+                        ],
+                    ),
+                    bgcolor=self.card_bg,
+                    border_radius=20,
+                    padding=25,
+                    border=ft.border.all(1, "white12"),
+                ),
+                
+                ft.Container(height=30),
+                ft.Text("📋 Members Directory", size=24, weight=ft.FontWeight.BOLD),
+                ft.Container(height=10),
+                
+                # Members list
+                ft.Container(
+                    content=self.members_list_container,
+                    height=400,
+                ),
+            ],
+            scroll=ft.ScrollMode.AUTO,
+        )
+    
+    def generate_member_code(self):
+        """Generate unique member code"""
+        self.cursor.execute("SELECT member_code FROM members ORDER BY member_code DESC LIMIT 1")
+        result = self.cursor.fetchone()
+        
+        if result:
+            last_code = result[0]
+            sequence = int(last_code[1:]) + 1
+        else:
+            sequence = 1
+        
+        return f"M{sequence:06d}"
+    
+    def add_member(self, e):
+        """Add new member"""
+        name = self.member_name_field.value.strip() if self.member_name_field.value else ""
+        phone = self.member_phone_field.value.strip() if self.member_phone_field.value else ""
+        email = self.member_email_field.value.strip() if self.member_email_field.value else ""
+        address = self.member_address_field.value.strip() if self.member_address_field.value else ""
+        
+        if not name:
+            self.show_snackbar("❌ Please enter member name!", self.danger_color)
+            return
+        
+        member_code = self.generate_member_code()
+        join_date = datetime.now().strftime("%Y-%m-%d")
+        
+        try:
+            self.cursor.execute(
+                "INSERT INTO members VALUES (?, ?, ?, ?, ?, ?)",
+                (member_code, name, phone, email, address, join_date)
+            )
+            self.conn.commit()
+            self.show_snackbar(f"✅ Member added! Code: {member_code}", self.success_color)
+            
+            # Clear fields
+            self.member_name_field.value = ""
+            self.member_phone_field.value = ""
+            self.member_email_field.value = ""
+            self.member_address_field.value = ""
+            
+            self.refresh_members()
+            self.page.update()
+        except Exception as ex:
+            self.show_snackbar(f"❌ Error: {str(ex)}", self.danger_color)
+    
+    def refresh_members(self):
+        """Refresh members list"""
+        self.members_list_container.controls.clear()
+        
+        self.cursor.execute("SELECT * FROM members ORDER BY member_code DESC LIMIT 50")
+        members = self.cursor.fetchall()
+        
+        if not members:
+            self.members_list_container.controls.append(
+                ft.Container(
+                    content=ft.Text(
+                        "No members yet. Register the first one! 👤",
+                        size=16,
+                        color="grey",
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    padding=40,
+                    alignment=ft.Alignment(0, 0),
+                )
+            )
+        else:
+            for member in members:
+                code, name, phone, email, address, join_date = member
+                self.members_list_container.controls.append(
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Row(
+                                    [
+                                        ft.Container(
+                                            content=ft.Text(code, size=12, weight=ft.FontWeight.BOLD),
+                                            bgcolor=self.success_color,
+                                            padding=8,
+                                            border_radius=8,
+                                        ),
+                                        ft.Container(expand=True),
+                                        ft.IconButton(
+                                            icon=ft.icons.DELETE_OUTLINE,
+                                            icon_color=self.danger_color,
+                                            tooltip="Delete member",
+                                            on_click=lambda _, c=code: self.delete_member(c),
+                                        ),
+                                    ],
+                                ),
+                                ft.Text(name, size=16, weight=ft.FontWeight.BOLD),
+                                ft.Row(
+                                    [
+                                        ft.Text(f"📱 {phone or 'N/A'}", size=12, color="white70") if phone else ft.Container(),
+                                        ft.Text("•", color="grey") if phone and email else ft.Container(),
+                                        ft.Text(f"📧 {email or 'N/A'}", size=12, color="white70") if email else ft.Container(),
+                                    ],
+                                    spacing=5,
+                                ),
+                                ft.Text(f"📅 Joined: {join_date}", size=12, color="grey"),
+                            ],
+                            spacing=8,
+                        ),
+                        bgcolor=self.card_bg,
+                        border_radius=15,
+                        padding=20,
+                        border=ft.border.all(1, "white12"),
+                        animate=ft.Animation(200, "easeOut"),
+                    )
+                )
+        
+        if self.page:
+            self.page.update()
+    
+    def delete_member(self, code):
+        """Delete member"""
+        def confirm_delete(e):
+            try:
+                self.cursor.execute("DELETE FROM members WHERE member_code = ?", (code,))
+                self.conn.commit()
+                self.show_snackbar("✅ Member deleted!", self.success_color)
+                self.refresh_members()
+                dialog.open = False
+                self.page.update()
+            except Exception as ex:
+                self.show_snackbar("❌ Cannot delete! Member has active loans.", self.danger_color)
+                dialog.open = False
+                self.page.update()
+        
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Confirm Delete"),
+            content=ft.Text(f"Delete member '{code}'?"),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: setattr(dialog, 'open', False) or self.page.update()),
+                ft.TextButton("Delete", on_click=confirm_delete, style=ft.ButtonStyle(color=self.danger_color)),
+            ],
+        )
+        
+        self.page.dialog = dialog
+        dialog.open = True
+        self.page.update()
+    
+    # ==================== TRANSACTIONS VIEW ====================
+    def create_transactions_view(self):
+        """Create transactions view"""
+        # Borrow fields
+        self.borrow_member_field = ft.TextField(
+            label="Member Code",
+            hint_text="e.g., M000001",
+            border_color=self.primary_color,
+            width=200,
+        )
+        
+        self.borrow_book_field = ft.TextField(
+            label="Book Code",
+            hint_text="e.g., 0100001",
+            border_color=self.primary_color,
+            width=200,
+        )
+        
+        # Return field
+        self.return_book_field = ft.TextField(
+            label="Book Code",
+            hint_text="e.g., 0100001",
+            border_color=self.primary_color,
+            width=200,
+        )
+        
+        # Active loans list
+        self.loans_list_container = ft.Column(spacing=10)
+        self.refresh_loans()
+        
+        return ft.Column(
+            [
+                ft.Text("🔄 Transactions", size=32, weight=ft.FontWeight.BOLD),
+                ft.Container(height=20),
+                
+                # Transaction cards
+                ft.ResponsiveRow(
+                    [
+                        # Borrow card
+                        ft.Container(
+                            col={"sm": 12, "md": 6},
+                            content=ft.Container(
+                                content=ft.Column(
+                                    [
+                                        ft.Text("📚 Borrow Book", size=20, weight=ft.FontWeight.BOLD),
+                                        ft.Container(height=15),
+                                        self.borrow_member_field,
+                                        ft.Container(height=10),
+                                        self.borrow_book_field,
+                                        ft.Container(height=15),
+                                        ft.FilledButton(
+                                            "📖 Borrow",
+                                            on_click=self.borrow_book,
+                                            style=ft.ButtonStyle(
+                                                bgcolor=self.primary_color,
+                                                color="white",
+                                                padding=20,
+                                            ),
+                                        ),
+                                    ],
+                                ),
+                                bgcolor=self.card_bg,
+                                border_radius=20,
+                                padding=25,
+                                border=ft.border.all(1, "white12"),
+                            ),
+                            padding=10,
+                        ),
+                        
+                        # Return card
+                        ft.Container(
+                            col={"sm": 12, "md": 6},
+                            content=ft.Container(
+                                content=ft.Column(
+                                    [
+                                        ft.Text("↩️ Return Book", size=20, weight=ft.FontWeight.BOLD),
+                                        ft.Container(height=15),
+                                        self.return_book_field,
+                                        ft.Container(height=10),
+                                        ft.Text("Loan period: 14 days", size=13, color="grey"),
+                                        ft.Text("Late fee: Rp 10,000/week", size=13, color="grey"),
+                                        ft.Container(height=15),
+                                        ft.FilledButton(
+                                            "✅ Return",
+                                            on_click=self.return_book,
+                                            style=ft.ButtonStyle(
+                                                bgcolor=self.success_color,
+                                                color="white",
+                                                padding=20,
+                                            ),
+                                        ),
+                                    ],
+                                ),
+                                bgcolor=self.card_bg,
+                                border_radius=20,
+                                padding=25,
+                                border=ft.border.all(1, "white12"),
+                            ),
+                            padding=10,
+                        ),
+                    ],
+                ),
+                
+                ft.Container(height=30),
+                ft.Text("📋 Active Loans", size=24, weight=ft.FontWeight.BOLD),
+                ft.Container(height=10),
+                
+                # Loans list
+                ft.Container(
+                    content=self.loans_list_container,
+                    height=350,
+                ),
+            ],
+            scroll=ft.ScrollMode.AUTO,
+        )
+    
+    def borrow_book(self, e):
+        """Process borrowing"""
+        member_code = self.borrow_member_field.value.strip() if self.borrow_member_field.value else ""
+        book_code = self.borrow_book_field.value.strip() if self.borrow_book_field.value else ""
+        
+        if not member_code or not book_code:
+            self.show_snackbar("❌ Please enter both codes!", self.danger_color)
+            return
+        
+        # Verify member
+        self.cursor.execute("SELECT * FROM members WHERE member_code = ?", (member_code,))
+        if not self.cursor.fetchone():
+            self.show_snackbar("❌ Member not found!", self.danger_color)
+            return
+        
+        # Verify book
+        self.cursor.execute("SELECT * FROM books WHERE book_code = ?", (book_code,))
+        if not self.cursor.fetchone():
+            self.show_snackbar("❌ Book not found!", self.danger_color)
+            return
+        
+        # Check if already borrowed
+        self.cursor.execute(
+            "SELECT * FROM borrowings WHERE book_code = ? AND return_date IS NULL",
+            (book_code,)
+        )
+        if self.cursor.fetchone():
+            self.show_snackbar("❌ Book is already borrowed!", self.danger_color)
+            return
+        
+        borrow_date = datetime.now().strftime("%Y-%m-%d")
+        due_date = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
+        
+        try:
+            self.cursor.execute(
+                "INSERT INTO borrowings (member_code, book_code, borrow_date, due_date) VALUES (?, ?, ?, ?)",
+                (member_code, book_code, borrow_date, due_date)
+            )
+            self.conn.commit()
+            self.show_snackbar(f"✅ Book borrowed! Due: {due_date}", self.success_color)
+            
+            self.borrow_member_field.value = ""
+            self.borrow_book_field.value = ""
+            
+            self.refresh_loans()
+            self.page.update()
+        except Exception as ex:
+            self.show_snackbar(f"❌ Error: {str(ex)}", self.danger_color)
+    
+    def calculate_fine(self, due_date_str):
+        """Calculate late fine"""
+        due_date = datetime.strptime(due_date_str, "%Y-%m-%d")
+        today = datetime.now()
+        
+        if today <= due_date:
+            return 0
+        
+        days_late = (today - due_date).days
+        weeks_late = (days_late // 7) + (1 if days_late % 7 > 0 else 0)
+        
+        return weeks_late * 10000
+    
+    def return_book(self, e):
+        """Process return"""
+        book_code = self.return_book_field.value.strip() if self.return_book_field.value else ""
+        
+        if not book_code:
+            self.show_snackbar("❌ Please enter book code!", self.danger_color)
+            return
+        
+        self.cursor.execute(
+            "SELECT id, due_date FROM borrowings WHERE book_code = ? AND return_date IS NULL",
+            (book_code,)
+        )
+        result = self.cursor.fetchone()
+        
+        if not result:
+            self.show_snackbar("❌ Book is not currently borrowed!", self.danger_color)
+            return
+        
+        borrowing_id, due_date = result
+        fine = self.calculate_fine(due_date)
+        return_date = datetime.now().strftime("%Y-%m-%d")
+        
+        try:
+            self.cursor.execute(
+                "UPDATE borrowings SET return_date = ?, fine = ? WHERE id = ?",
+                (return_date, fine, borrowing_id)
+            )
+            self.conn.commit()
+            
+            if fine > 0:
+                self.show_snackbar(f"✅ Book returned! Fine: Rp {fine:,}", self.warning_color)
+            else:
+                self.show_snackbar("✅ Book returned on time!", self.success_color)
+            
+            self.return_book_field.value = ""
+            
+            self.refresh_loans()
+            self.page.update()
+        except Exception as ex:
+            self.show_snackbar(f"❌ Error: {str(ex)}", self.danger_color)
+    
+    def refresh_loans(self):
+        """Refresh active loans list"""
+        self.loans_list_container.controls.clear()
+        
+        self.cursor.execute("""
+            SELECT b.member_code, b.book_code, b.borrow_date, b.due_date,
+                   m.member_name, bk.book_name
+            FROM borrowings b
+            JOIN members m ON b.member_code = m.member_code
+            JOIN books bk ON b.book_code = bk.book_code
+            WHERE b.return_date IS NULL
+            ORDER BY b.due_date
+        """)
+        loans = self.cursor.fetchall()
+        
+        if not loans:
+            self.loans_list_container.controls.append(
+                ft.Container(
+                    content=ft.Text(
+                        "No active loans 📭",
+                        size=16,
+                        color="grey",
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    padding=40,
+                    alignment=ft.Alignment(0, 0),
+                )
+            )
+        else:
+            for loan in loans:
+                member_code, book_code, borrow_date, due_date, member_name, book_name = loan
+                fine = self.calculate_fine(due_date)
+                is_overdue = fine > 0
+                
+                self.loans_list_container.controls.append(
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Row(
+                                    [
+                                        ft.Container(
+                                            content=ft.Text("⚠️ OVERDUE" if is_overdue else "✅ ACTIVE", 
+                                                          size=10, weight=ft.FontWeight.BOLD),
+                                            bgcolor=self.danger_color if is_overdue else self.success_color,
+                                            padding=6,
+                                            border_radius=6,
+                                        ),
+                                        ft.Container(expand=True),
+                                    ],
+                                ),
+                                ft.Text(book_name, size=15, weight=ft.FontWeight.BOLD),
+                                ft.Text(f"👤 {member_name} ({member_code})", size=12, color="white70"),
+                                ft.Row(
+                                    [
+                                        ft.Text(f"📖 {book_code}", size=12, color="white70"),
+                                        ft.Text("•", color="grey"),
+                                        ft.Text(f"📅 Due: {due_date}", size=12, color="white70"),
+                                        ft.Text("•", color="grey") if fine > 0 else ft.Container(),
+                                        ft.Text(f"💰 Fine: Rp {fine:,}", size=12, color=self.danger_color) if fine > 0 else ft.Container(),
+                                    ],
+                                    spacing=5,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
+                        bgcolor=self.card_bg,
+                        border_radius=15,
+                        padding=20,
+                        border=ft.border.all(2, self.danger_color if is_overdue else "white12"),
+                        animate=ft.Animation(200, "easeOut"),
+                    )
+                )
+        
+        if self.page:
+            self.page.update()
+    
+    # ==================== SEARCH VIEW ====================
+    def create_search_view(self):
+        """Create search view"""
+        self.search_field = ft.TextField(
+            label="Search",
+            hint_text="Enter book name, author, or member name...",
+            border_color=self.primary_color,
+            expand=True,
+            on_submit=lambda _: self.perform_search(),
+        )
+        
+        self.search_results_container = ft.Column(spacing=10)
+        
+        return ft.Column(
+            [
+                ft.Text("🔍 Search", size=32, weight=ft.FontWeight.BOLD),
+                ft.Container(height=20),
+                
+                # Search bar
+                ft.Row(
+                    [
+                        self.search_field,
+                        ft.FilledButton(
+                            "🔍 Search",
+                            on_click=lambda _: self.perform_search(),
+                            style=ft.ButtonStyle(
+                                bgcolor=self.primary_color,
+                                padding=20,
+                            ),
+                        ),
+                    ],
+                    spacing=10,
+                ),
+                
+                ft.Container(height=20),
+                
+                # Quick filters
+                ft.Row(
+                    [
+                        ft.FilledTonalButton("📚 All Books", on_click=lambda _: self.search_all_books()),
+                        ft.FilledTonalButton("👥 All Members", on_click=lambda _: self.search_all_members()),
+                        ft.FilledTonalButton("📖 Available Books", on_click=lambda _: self.search_available_books()),
+                    ],
+                    spacing=10,
+                    wrap=True,
+                ),
+                
+                ft.Container(height=30),
+                ft.Text("Results", size=20, weight=ft.FontWeight.BOLD),
+                ft.Container(height=10),
+                
+                # Results
+                ft.Container(
+                    content=self.search_results_container,
+                    height=500,
+                ),
+            ],
+            scroll=ft.ScrollMode.AUTO,
+        )
+    
+    def perform_search(self):
+        """Perform search"""
+        query = self.search_field.value.strip() if self.search_field.value else ""
+        
+        if not query:
+            self.show_snackbar("❌ Please enter search term!", self.danger_color)
+            return
+        
+        self.search_results_container.controls.clear()
+        
+        # Search books
+        self.cursor.execute("""
+            SELECT * FROM books 
+            WHERE book_name LIKE ? OR author LIKE ? OR book_code LIKE ?
+            LIMIT 20
+        """, (f'%{query}%', f'%{query}%', f'%{query}%'))
+        books = self.cursor.fetchall()
+        
+        # Search members
+        self.cursor.execute("""
+            SELECT * FROM members 
+            WHERE member_name LIKE ? OR member_code LIKE ?
+            LIMIT 20
+        """, (f'%{query}%', f'%{query}%'))
+        members = self.cursor.fetchall()
+        
+        # Display results
+        if books:
+            self.search_results_container.controls.append(
+                ft.Text(f"📚 Books ({len(books)})", size=18, weight=ft.FontWeight.BOLD)
+            )
+            for book in books:
+                code, name, author, publisher, year, genre_code = book
+                self.search_results_container.controls.append(
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(name, size=15, weight=ft.FontWeight.BOLD),
+                                ft.Text(f"by {author} • Code: {code}", size=12, color="grey"),
+                            ],
+                        ),
+                        bgcolor=self.card_bg,
+                        border_radius=10,
+                        padding=15,
+                        border=ft.border.all(1, "white12"),
+                    )
+                )
+        
+        if members:
+            self.search_results_container.controls.append(
+                ft.Container(height=20)
+            )
+            self.search_results_container.controls.append(
+                ft.Text(f"👥 Members ({len(members)})", size=18, weight=ft.FontWeight.BOLD)
+            )
+            for member in members:
+                code, name, phone, email, address, join_date = member
+                self.search_results_container.controls.append(
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(name, size=15, weight=ft.FontWeight.BOLD),
+                                ft.Text(f"Code: {code} • {phone or 'No phone'}", size=12, color="grey"),
+                            ],
+                        ),
+                        bgcolor=self.card_bg,
+                        border_radius=10,
+                        padding=15,
+                        border=ft.border.all(1, "white12"),
+                    )
+                )
+        
+        if not books and not members:
+            self.search_results_container.controls.append(
+                ft.Container(
+                    content=ft.Text(
+                        "No results found 🔍",
+                        size=16,
+                        color="grey",
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    padding=40,
+                    alignment=ft.Alignment(0, 0),
+                )
+            )
+        
+        self.page.update()
+    
+    def search_all_books(self):
+        """Show all books"""
+        self.search_results_container.controls.clear()
+        
+        self.cursor.execute("SELECT * FROM books ORDER BY book_code DESC LIMIT 50")
+        books = self.cursor.fetchall()
+        
+        self.search_results_container.controls.append(
+            ft.Text(f"📚 All Books ({len(books)})", size=18, weight=ft.FontWeight.BOLD)
+        )
+        
+        for book in books:
+            code, name, author, publisher, year, genre_code = book
+            self.search_results_container.controls.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(name, size=15, weight=ft.FontWeight.BOLD),
+                            ft.Text(f"by {author} • Code: {code}", size=12, color="grey"),
+                        ],
+                    ),
+                    bgcolor=self.card_bg,
+                    border_radius=10,
+                    padding=15,
+                    border=ft.border.all(1, "white12"),
+                )
+            )
+        
+        self.page.update()
+    
+    def search_all_members(self):
+        """Show all members"""
+        self.search_results_container.controls.clear()
+        
+        self.cursor.execute("SELECT * FROM members ORDER BY member_code DESC LIMIT 50")
+        members = self.cursor.fetchall()
+        
+        self.search_results_container.controls.append(
+            ft.Text(f"👥 All Members ({len(members)})", size=18, weight=ft.FontWeight.BOLD)
+        )
+        
+        for member in members:
+            code, name, phone, email, address, join_date = member
+            self.search_results_container.controls.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(name, size=15, weight=ft.FontWeight.BOLD),
+                            ft.Text(f"Code: {code} • Joined: {join_date}", size=12, color="grey"),
+                        ],
+                    ),
+                    bgcolor=self.card_bg,
+                    border_radius=10,
+                    padding=15,
+                    border=ft.border.all(1, "white12"),
+                )
+            )
+        
+        self.page.update()
+    
+    def search_available_books(self):
+        """Show available books"""
+        self.search_results_container.controls.clear()
+        
+        self.cursor.execute("""
+            SELECT b.* FROM books b
+            WHERE b.book_code NOT IN (
+                SELECT book_code FROM borrowings WHERE return_date IS NULL
+            )
+            ORDER BY b.book_code DESC
+            LIMIT 50
+        """)
+        books = self.cursor.fetchall()
+        
+        self.search_results_container.controls.append(
+            ft.Text(f"📚 Available Books ({len(books)})", size=18, weight=ft.FontWeight.BOLD)
+        )
+        
+        for book in books:
+            code, name, author, publisher, year, genre_code = book
+            self.search_results_container.controls.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Text(name, size=15, weight=ft.FontWeight.BOLD, expand=True),
+                                    ft.Container(
+                                        content=ft.Text("✅ Available", size=10),
+                                        bgcolor=self.success_color,
+                                        padding=5,
+                                        border_radius=5,
+                                    ),
+                                ],
+                            ),
+                            ft.Text(f"by {author} • Code: {code}", size=12, color="grey"),
+                        ],
+                    ),
+                    bgcolor=self.card_bg,
+                    border_radius=10,
+                    padding=15,
+                    border=ft.border.all(1, "white12"),
+                )
+            )
+        
+        self.page.update()
+    
+    # ==================== REPORTS VIEW ====================
+    def create_reports_view(self):
+        """Create reports view"""
+        return ft.Column(
+            [
+                ft.Text("📊 Reports & Analytics", size=32, weight=ft.FontWeight.BOLD),
+                ft.Container(height=30),
+                
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text("📈 Coming Soon!", size=24, weight=ft.FontWeight.BOLD),
+                            ft.Container(height=20),
+                            ft.Text(
+                                "Future features:\n\n"
+                                "• Borrowing statistics\n"
+                                "• Popular books chart\n"
+                                "• Member activity report\n"
+                                "• Revenue from fines\n"
+                                "• Export to Excel/PDF\n"
+                                "• Barcode generation",
+                                size=15,
+                                color="grey",
+                            ),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    bgcolor=self.card_bg,
+                    border_radius=20,
+                    padding=50,
+                    alignment=ft.Alignment(0, 0),
+                ),
+            ],
+            scroll=ft.ScrollMode.AUTO,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+def main(page: ft.Page):
+    ModernLibraryApp(page)
+
+if __name__ == "__main__":
+    # For desktop testing
+    # ft.app(target=main)
+    
+    # For web deployment
+    ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=8080)
